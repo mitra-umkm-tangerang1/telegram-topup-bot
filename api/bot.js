@@ -1,107 +1,227 @@
 import axios from "axios";
-import { startOrder, handleOrder } from "../lib/order.js";
-import { notifyAdmin } from "../lib/admin.js";
+import {
+  startOrder,
+  handleOrder,
+  getSession,
+  clearSession,
+  setWaitingPayment,
+  setStatus
+} from "../lib/order.js";
 
 const TOKEN = process.env.BOT_TOKEN;
 const TELEGRAM_API = `https://api.telegram.org/bot${TOKEN}`;
+const ADMIN_ID = String(process.env.ADMIN_ID);
 
 export default async function handler(req, res) {
   if (req.method !== "POST") {
     return res.status(200).send("Bot aktif");
   }
 
-  const message = req.body.message;
-  if (!message) return res.status(200).end();
+  const update = req.body;
 
+  /* ================= CALLBACK QUERY ================= */
+  if (update.callback_query) {
+    const cb = update.callback_query;
+    const chatId = cb.message.chat.id;
+    const userId = cb.from.id;
+    const data = cb.data;
+
+    /* === PILIH GAME === */
+    if (data === "GAME_ML" || data === "GAME_FF") {
+      const game = data === "GAME_ML" ? "ML" : "FF";
+      const reply = startOrder(userId, game);
+      await sendMessage(chatId, reply.text, reply.options);
+      return res.status(200).end();
+    }
+
+    /* === PILIH NOMINAL === */
+    if (data.startsWith("NOMINAL_")) {
+      const nominal = data.replace("NOMINAL_", "");
+      const result = handleOrder(userId, nominal);
+
+      if (result?.confirm) {
+        const o = result.order;
+        await sendMessage(
+          chatId,
+`🧾 *Ringkasan Order*
+
+🎮 Game: ${o.game}
+🆔 ID: ${o.gameId} (${o.server})
+💎 Nominal: ${o.product.name}
+💰 Harga: Rp${o.product.price}
+
+Lanjutkan order ini?`,
+          {
+            reply_markup: {
+              inline_keyboard: [
+                [{ text: "✅ Konfirmasi", callback_data: "CONFIRM_ORDER" }],
+                [{ text: "❌ Batal", callback_data: "CANCEL_ORDER" }]
+              ]
+            }
+          }
+        );
+      } else {
+        await sendMessage(chatId, result.text, result.options);
+      }
+      return res.status(200).end();
+    }
+
+    /* === KONFIRMASI ORDER === */
+    if (data === "CONFIRM_ORDER") {
+      const session = getSession(userId);
+      if (!session) return res.status(200).end();
+
+      setWaitingPayment(userId);
+
+      await sendMessage(
+        chatId,
+`✅ *Order dikonfirmasi*
+
+💰 Silakan transfer sesuai nominal
+📸 Upload *FOTO bukti transfer* di chat ini
+
+⚠️ Wajib foto, bukan teks`
+      );
+      return res.status(200).end();
+    }
+
+    /* === BATAL ORDER === */
+    if (data === "CANCEL_ORDER") {
+      clearSession(userId);
+      await sendMessage(chatId, "❌ Order dibatalkan\n\nKetik /start untuk ulang");
+      return res.status(200).end();
+    }
+
+    /* ================= ADMIN PANEL ================= */
+    if (data.startsWith("ADMIN_")) {
+      if (String(userId) !== ADMIN_ID) {
+        await sendMessage(chatId, "❌ Akses admin ditolak");
+        return res.status(200).end();
+      }
+
+      const [_, action, targetUserId] = data.split("_");
+      const order = getSession(targetUserId);
+      if (!order) return res.status(200).end();
+
+      if (action === "APPROVE") {
+        setStatus(targetUserId, "APPROVED");
+        await sendMessage(
+          targetUserId,
+          "✅ *Pembayaran diterima*\n⏳ Order sedang diproses"
+        );
+        await sendMessage(chatId, "✔️ Order di-approve");
+      }
+
+      if (action === "REJECT") {
+        clearSession(targetUserId);
+        await sendMessage(
+          targetUserId,
+          "❌ *Pembayaran ditolak*\nSilakan order ulang"
+        );
+        await sendMessage(chatId, "❌ Order ditolak");
+      }
+
+      if (action === "DONE") {
+        clearSession(targetUserId);
+        await sendMessage(
+          targetUserId,
+          "🎉 *Order selesai*\nDiamond sudah masuk 🙏"
+        );
+        await sendMessage(chatId, "🎮 Order ditandai SELESAI");
+      }
+
+      return res.status(200).end();
+    }
+
+    return res.status(200).end();
+  }
+
+  /* ================= MESSAGE ================= */
+  if (!update.message) return res.status(200).end();
+
+  const message = update.message;
   const chatId = message.chat.id;
   const userId = message.from.id;
   const text = message.text || "";
 
-  // ===== /START =====
+  /* === /START === */
   if (text === "/start") {
     await sendMessage(
       chatId,
-`👋 Selamat datang di Bot Top Up Game!
+`👋 *Selamat datang di Bot Top Up Game*
 
-🎮 Game tersedia:
-1️⃣ Mobile Legends
-2️⃣ Free Fire
-
-⏱ Proses cepat | 💳 Pembayaran manual
-Ketik angka pilihan kamu`
+🎮 Pilih game:`,
+      {
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: "🎯 Mobile Legends", callback_data: "GAME_ML" }],
+            [{ text: "🔥 Free Fire", callback_data: "GAME_FF" }]
+          ]
+        }
+      }
     );
     return res.status(200).end();
   }
 
-  // ===== PILIH GAME =====
-  if (text === "1") {
-    const reply = startOrder(userId, "ML");
-    await sendMessage(chatId, reply);
-    return res.status(200).end();
-  }
+  /* === UPLOAD BUKTI TRANSFER === */
+  if (message.photo) {
+    const session = getSession(userId);
 
-  if (text === "2") {
-    const reply = startOrder(userId, "FF");
-    await sendMessage(chatId, reply);
-    return res.status(200).end();
-  }
+    if (!session || session.step !== "WAIT_PAYMENT") {
+      await sendMessage(chatId, "❌ Tidak ada order aktif\nKetik /start");
+      return res.status(200).end();
+    }
 
-  // ===== PROSES ORDER =====
-  const result = handleOrder(userId, text);
-  if (!result) return res.status(200).end();
+    const fileId = message.photo.at(-1).file_id;
 
-  // Jika order selesai
-  if (result.done) {
-    const order = result.order;
+    await axios.post(`${TELEGRAM_API}/sendPhoto`, {
+      chat_id: ADMIN_ID,
+      photo: fileId,
+      caption:
+`🧾 *BUKTI TRANSFER*
+
+🎮 Game: ${session.game}
+🆔 ID: ${session.gameId} (${session.server})
+💎 Nominal: ${session.product.name}
+💰 Harga: Rp${session.product.price}
+
+👤 User ID: ${userId}`,
+      parse_mode: "Markdown",
+      reply_markup: {
+        inline_keyboard: [
+          [
+            { text: "✅ Approve", callback_data: `ADMIN_APPROVE_${userId}` },
+            { text: "❌ Tolak", callback_data: `ADMIN_REJECT_${userId}` }
+          ],
+          [{ text: "🎮 Selesai", callback_data: `ADMIN_DONE_${userId}` }]
+        ]
+      }
+    });
+
+    session.step = "WAIT_ADMIN";
 
     await sendMessage(
       chatId,
-`✅ Order diterima
-
-🎮 Game: ${order.game}
-🆔 ID: ${order.gameId} (${order.server})
-💎 Nominal: ${order.product.name}
-💰 Harga: Rp${order.product.price}
-
-Silakan transfer & kirim bukti pembayaran.`
+      "⏳ Bukti diterima\nMenunggu konfirmasi admin 🙏"
     );
-
-    // Kirim notif ke admin
-    await notifyAdminAxios(order, message.from);
-
     return res.status(200).end();
   }
 
-  // Jika masih proses step
-  await sendMessage(chatId, result);
+  /* === INPUT ID / SERVER === */
+  const result = handleOrder(userId, text);
+  if (result) {
+    await sendMessage(chatId, result.text, result.options);
+  }
+
   return res.status(200).end();
 }
 
-// ===== HELPER =====
-async function sendMessage(chatId, text) {
+/* ================= HELPER ================= */
+async function sendMessage(chatId, text, options = {}) {
   await axios.post(`${TELEGRAM_API}/sendMessage`, {
     chat_id: chatId,
-    text
-  });
-}
-
-// ===== NOTIF ADMIN (AXIOS VERSION) =====
-async function notifyAdminAxios(order, user) {
-  const ADMIN_ID = process.env.ADMIN_ID;
-
-  const msg = `
-🧾 ORDER BARU
-🎮 Game: ${order.game}
-🆔 ID: ${order.gameId} (${order.server})
-💎 Nominal: ${order.product.name}
-💰 Harga: Rp${order.product.price}
-
-👤 User: @${user.username || "noname"}
-🆔 User ID: ${user.id}
-  `;
-
-  await axios.post(`${TELEGRAM_API}/sendMessage`, {
-    chat_id: ADMIN_ID,
-    text: msg
+    text,
+    parse_mode: "Markdown",
+    ...options
   });
 }
