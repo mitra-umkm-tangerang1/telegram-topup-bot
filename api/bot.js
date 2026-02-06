@@ -13,6 +13,29 @@ const TOKEN = process.env.BOT_TOKEN;
 const TELEGRAM_API = `https://api.telegram.org/bot${TOKEN}`;
 const ADMIN_ID = String(process.env.ADMIN_ID);
 
+// ================= PAYMENT INFO =================
+const PAYMENT_TEXT = `
+💳 *Informasi Pembayaran*
+
+🏦 *BCA*
+0750184219
+A/N: *ROHMAN BRAMANTO*
+
+📱 *DANA*
+085694766782
+A/N: *ROHMAN BRAMANTO*
+
+📌 *Catatan penting:*
+• Transfer sesuai nominal
+• Wajib kirim *FOTO bukti transfer*
+• Screenshot / foto jelas
+`;
+
+const QRIS_IMAGE_URL =
+  "https://telegram-topup-bot-cwgs.vercel.app/qris.jpg";
+
+// =================================================
+
 export default async function handler(req, res) {
   try {
     if (req.method !== "POST") {
@@ -21,7 +44,7 @@ export default async function handler(req, res) {
 
     const update = req.body;
 
-    /* ================= CALLBACK QUERY ================= */
+    /* ================= CALLBACK ================= */
     if (update.callback_query) {
       const cb = update.callback_query;
       const chatId = cb.message.chat.id;
@@ -36,23 +59,41 @@ export default async function handler(req, res) {
         return res.status(200).end();
       }
 
-      // === CALLBACK ORDER ===
+      // === FLOW ORDER ===
       const cbResult = handleCallback(userId, data);
       if (cbResult) {
         if (cbResult.confirm) {
+          const o = cbResult.order;
           setWaitingPayment(userId);
+
+          // 1️⃣ DETAIL ORDER + PAYMENT TEXT
           await sendMessage(
             chatId,
 `✅ *Order dikonfirmasi*
 
-💰 Silakan transfer sesuai nominal
-📸 Upload *FOTO bukti transfer*
+🎮 Game: ${o.game}
+🆔 ID: ${o.gameId} (${o.server})
+💎 Produk: ${o.product.name}
+💰 Harga: Rp${o.product.price}
 
-⚠️ Wajib foto, bukan teks`
+${PAYMENT_TEXT}`
           );
+
+          // 2️⃣ KIRIM QRIS
+          await axios.post(`${TELEGRAM_API}/sendPhoto`, {
+            chat_id: chatId,
+            photo: QRIS_IMAGE_URL,
+            caption:
+`📷 *QRIS Pembayaran*
+Scan QRIS di atas untuk bayar
+
+📸 Setelah bayar, *kirim FOTO bukti transfer di chat ini*`,
+            parse_mode: "Markdown"
+          });
         } else {
           await sendMessage(chatId, cbResult.text, cbResult.options);
         }
+
         return res.status(200).end();
       }
 
@@ -63,7 +104,7 @@ export default async function handler(req, res) {
           return res.status(200).end();
         }
 
-        const [_, action, targetUserId] = data.split("_");
+        const [, action, targetUserId] = data.split("_");
         const order = getSession(targetUserId);
         if (!order) return res.status(200).end();
 
@@ -80,7 +121,7 @@ export default async function handler(req, res) {
           clearSession(targetUserId);
           await sendMessage(
             targetUserId,
-            "❌ *Pembayaran ditolak*\nSilakan order ulang"
+            "❌ *Pembayaran ditolak*\nSilakan order ulang dengan /start"
           );
           await sendMessage(chatId, "❌ Order ditolak");
         }
@@ -127,7 +168,7 @@ export default async function handler(req, res) {
       return res.status(200).end();
     }
 
-    // === UPLOAD BUKTI TRANSFER ===
+    // === FOTO BUKTI TRANSFER ===
     if (message.photo) {
       const session = getSession(userId);
       if (!session || session.step !== "WAIT_PAYMENT") {
@@ -145,7 +186,7 @@ export default async function handler(req, res) {
 
 🎮 Game: ${session.game}
 🆔 ID: ${session.gameId} (${session.server})
-💎 Nominal: ${session.product.name}
+💎 Produk: ${session.product.name}
 💰 Harga: Rp${session.product.price}
 
 👤 User ID: ${userId}`,
@@ -162,7 +203,6 @@ export default async function handler(req, res) {
       });
 
       session.step = "WAIT_ADMIN";
-
       await sendMessage(chatId, "⏳ Bukti diterima\nMenunggu konfirmasi admin 🙏");
       return res.status(200).end();
     }
@@ -176,7 +216,7 @@ export default async function handler(req, res) {
     return res.status(200).end();
   } catch (err) {
     console.error("BOT ERROR:", err);
-    return res.status(200).end(); // WAJIB 200 agar webhook tidak mati
+    return res.status(200).end();
   }
 }
 
