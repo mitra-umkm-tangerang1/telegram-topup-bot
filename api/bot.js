@@ -13,6 +13,14 @@ const TOKEN = process.env.BOT_TOKEN;
 const TELEGRAM_API = `https://api.telegram.org/bot${TOKEN}`;
 const ADMIN_ID = String(process.env.ADMIN_ID);
 
+// ================= FORMAT RUPIAH =================
+const formatRupiah = (number) =>
+  new Intl.NumberFormat("id-ID", {
+    style: "currency",
+    currency: "IDR",
+    minimumFractionDigits: 0
+  }).format(number);
+
 // ================= PAYMENT INFO =================
 const PAYMENT_TEXT = `
 💳 *Informasi Pembayaran*
@@ -66,7 +74,6 @@ export default async function handler(req, res) {
           const o = cbResult.order;
           setWaitingPayment(userId);
 
-          // 1️⃣ DETAIL ORDER + PAYMENT TEXT
           await sendMessage(
             chatId,
 `✅ *Order dikonfirmasi*
@@ -74,12 +81,12 @@ export default async function handler(req, res) {
 🎮 Game: ${o.game}
 🆔 ID: ${o.gameId} (${o.server})
 💎 Produk: ${o.product.name}
-💰 Harga: Rp${o.product.price}
+💰 Harga: *${formatRupiah(o.product.price)}*
 
 ${PAYMENT_TEXT}`
           );
 
-          // 2️⃣ KIRIM QRIS
+          // QRIS
           await axios.post(`${TELEGRAM_API}/sendPhoto`, {
             chat_id: chatId,
             photo: QRIS_IMAGE_URL,
@@ -187,10 +194,11 @@ Scan QRIS di atas untuk bayar
 🎮 Game: ${session.game}
 🆔 ID: ${session.gameId} (${session.server})
 💎 Produk: ${session.product.name}
-💰 Harga: Rp${session.product.price}
+💰 Harga: *${formatRupiah(session.product.price)}*
 
 👤 User ID: ${userId}`,
         parse_mode: "Markdown",
+        know_reply_markup: true,
         reply_markup: {
           inline_keyboard: [
             [
