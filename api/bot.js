@@ -144,7 +144,7 @@ User ID: ${userId}`;
 Scan QRIS di atas untuk bayar
 
 📸 Setelah bayar, *kirim FOTO bukti transfer di chat ini*`,
-            parse_mode: "Markdown"
+            
           });
         } else {
           await sendMessage(chatId, cbResult.text, cbResult.options);
@@ -243,7 +243,7 @@ Scan QRIS di atas untuk bayar
 💰 Harga: *${formatRupiah(session.product.price)}*
 
 👤 User ID: ${userId}`,
-        parse_mode: "Markdown",
+        
         reply_markup: {
           inline_keyboard: [
             [
@@ -276,7 +276,7 @@ async function sendMessage(chatId, text, options = {}) {
   await axios.post(`${TELEGRAM_API}/sendMessage`, {
     chat_id: chatId,
     text,
-    parse_mode: "Markdown",
+    
     ...options
   });
 }
