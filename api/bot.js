@@ -13,8 +13,8 @@ import {
 
 const TOKEN = process.env.BOT_TOKEN;
 const TELEGRAM_API = `https://api.telegram.org/bot${TOKEN}`;
-const ADMIN_ID = String(process.env.ADMIN_ID);
-const FONNTE_TOKEN = process.env.FONNTE_TOKEN;
+const ADMIN_ID = String(process.env.ADMIN_ID || "");
+const FONNTE_TOKEN = process.env.FONNTE_TOKEN || "";
 
 // ================= FORMAT RUPIAH =================
 const formatRupiah = (number) =>
@@ -26,6 +26,7 @@ const formatRupiah = (number) =>
 
 // ================= KIRIM WHATSAPP =================
 async function sendWA(text) {
+  if (!FONNTE_TOKEN) return;
   try {
     await fetch("https://api.fonnte.com/send", {
       method: "POST",
@@ -39,7 +40,7 @@ async function sendWA(text) {
       })
     });
   } catch (e) {
-    console.log("WA ERROR", e);
+    console.log("WA ERROR", e?.message);
   }
 }
 
@@ -67,12 +68,26 @@ const QRIS_IMAGE_URL =
 // =================================================
 
 export default async function handler(req, res) {
+  // Endpoint health check
+  if (req.method !== "POST") {
+    return res.status(200).send("Bot aktif");
+  }
+
+  if (!TOKEN) {
+    console.error("BOT_TOKEN belum di set");
+    return res.status(200).end();
+  }
+
   try {
-    if (req.method !== "POST") {
-      return res.status(200).send("Bot aktif");
+    // ===== PASTIKAN BODY TERBACA =====
+    let update = req.body;
+    if (typeof update === "string") {
+      update = JSON.parse(update);
     }
 
-    const update = req.body;
+    if (!update) {
+      return res.status(200).end();
+    }
 
     /* ================= CALLBACK ================= */
     if (update.callback_query) {
@@ -81,7 +96,6 @@ export default async function handler(req, res) {
       const userId = cb.from.id;
       const data = cb.data;
 
-      // === PILIH GAME ===
       if (data === "GAME_ML" || data === "GAME_FF") {
         const game = data === "GAME_ML" ? "ML" : "FF";
         const reply = startOrder(userId, game);
@@ -89,14 +103,12 @@ export default async function handler(req, res) {
         return res.status(200).end();
       }
 
-      // === FLOW ORDER ===
       const cbResult = handleCallback(userId, data);
       if (cbResult) {
         if (cbResult.confirm) {
           const o = cbResult.order;
           setWaitingPayment(userId);
 
-          // KE USER
           await sendMessage(
             chatId,
 `✅ *Order dikonfirmasi*
@@ -109,7 +121,6 @@ export default async function handler(req, res) {
 ${PAYMENT_TEXT}`
           );
 
-          // TELEGRAM ADMIN
           const adminText =
 `🛒 ORDER MASUK
 
@@ -119,12 +130,12 @@ Produk: ${o.product.name}
 Harga: ${formatRupiah(o.product.price)}
 User ID: ${userId}`;
 
-          await sendMessage(ADMIN_ID, adminText);
+          if (ADMIN_ID) {
+            await sendMessage(ADMIN_ID, adminText);
+          }
 
-          // WHATSAPP ADMIN
           await sendWA(adminText);
 
-          // QRIS
           await axios.post(`${TELEGRAM_API}/sendPhoto`, {
             chat_id: chatId,
             photo: QRIS_IMAGE_URL,
@@ -142,7 +153,6 @@ Scan QRIS di atas untuk bayar
         return res.status(200).end();
       }
 
-      // === ADMIN PANEL ===
       if (data.startsWith("ADMIN_")) {
         if (String(userId) !== ADMIN_ID) {
           await sendMessage(chatId, "❌ Akses admin ditolak");
@@ -194,7 +204,6 @@ Scan QRIS di atas untuk bayar
     const userId = message.from.id;
     const text = message.text || "";
 
-    // START
     if (text === "/start") {
       await sendMessage(
         chatId,
@@ -213,7 +222,6 @@ Scan QRIS di atas untuk bayar
       return res.status(200).end();
     }
 
-    // FOTO
     if (message.photo) {
       const session = getSession(userId);
       if (!session || session.step !== "WAIT_PAYMENT") {
@@ -259,7 +267,7 @@ Scan QRIS di atas untuk bayar
 
     return res.status(200).end();
   } catch (err) {
-    console.error("BOT ERROR:", err);
+    console.error("BOT ERROR:", err?.message);
     return res.status(200).end();
   }
 }
