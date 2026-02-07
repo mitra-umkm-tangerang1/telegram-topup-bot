@@ -1,4 +1,6 @@
 import axios from "axios";
+import fetch from "node-fetch";
+
 import {
   startOrder,
   handleText,
@@ -12,6 +14,7 @@ import {
 const TOKEN = process.env.BOT_TOKEN;
 const TELEGRAM_API = `https://api.telegram.org/bot${TOKEN}`;
 const ADMIN_ID = String(process.env.ADMIN_ID);
+const FONNTE_TOKEN = process.env.FONNTE_TOKEN;
 
 // ================= FORMAT RUPIAH =================
 const formatRupiah = (number) =>
@@ -20,6 +23,25 @@ const formatRupiah = (number) =>
     currency: "IDR",
     minimumFractionDigits: 0
   }).format(number);
+
+// ================= KIRIM WHATSAPP =================
+async function sendWA(text) {
+  try {
+    await fetch("https://api.fonnte.com/send", {
+      method: "POST",
+      headers: {
+        Authorization: FONNTE_TOKEN,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        target: "6285718539571",
+        message: text
+      })
+    });
+  } catch (e) {
+    console.log("WA ERROR", e);
+  }
+}
 
 // ================= PAYMENT INFO =================
 const PAYMENT_TEXT = `
@@ -74,7 +96,7 @@ export default async function handler(req, res) {
           const o = cbResult.order;
           setWaitingPayment(userId);
 
-          // KIRIM KE USER
+          // KE USER
           await sendMessage(
             chatId,
 `✅ *Order dikonfirmasi*
@@ -87,17 +109,20 @@ export default async function handler(req, res) {
 ${PAYMENT_TEXT}`
           );
 
-          // KIRIM NOTIF KE TELEGRAM ADMIN (ORDER MASUK)
-          await sendMessage(
-            ADMIN_ID,
-`🛒 *ORDER MASUK*
+          // TELEGRAM ADMIN
+          const adminText =
+`🛒 ORDER MASUK
 
-🎮 Game: ${o.game}
-🆔 ID: ${o.gameId} (${o.server})
-💎 Produk: ${o.product.name}
-💰 Harga: *${formatRupiah(o.product.price)}*
-👤 User ID: ${userId}`
-          );
+Game: ${o.game}
+ID: ${o.gameId} (${o.server})
+Produk: ${o.product.name}
+Harga: ${formatRupiah(o.product.price)}
+User ID: ${userId}`;
+
+          await sendMessage(ADMIN_ID, adminText);
+
+          // WHATSAPP ADMIN
+          await sendWA(adminText);
 
           // QRIS
           await axios.post(`${TELEGRAM_API}/sendPhoto`, {
@@ -169,7 +194,7 @@ Scan QRIS di atas untuk bayar
     const userId = message.from.id;
     const text = message.text || "";
 
-    // === /START ===
+    // START
     if (text === "/start") {
       await sendMessage(
         chatId,
@@ -188,7 +213,7 @@ Scan QRIS di atas untuk bayar
       return res.status(200).end();
     }
 
-    // === FOTO BUKTI TRANSFER ===
+    // FOTO
     if (message.photo) {
       const session = getSession(userId);
       if (!session || session.step !== "WAIT_PAYMENT") {
@@ -227,7 +252,6 @@ Scan QRIS di atas untuk bayar
       return res.status(200).end();
     }
 
-    // === INPUT ID / SERVER ===
     const textResult = handleText(userId, text);
     if (textResult) {
       await sendMessage(chatId, textResult.text, textResult.options);
@@ -240,7 +264,6 @@ Scan QRIS di atas untuk bayar
   }
 }
 
-/* ================= HELPER ================= */
 async function sendMessage(chatId, text, options = {}) {
   await axios.post(`${TELEGRAM_API}/sendMessage`, {
     chat_id: chatId,
