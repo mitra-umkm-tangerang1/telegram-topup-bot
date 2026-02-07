@@ -68,7 +68,6 @@ const QRIS_IMAGE_URL =
 // =================================================
 
 export default async function handler(req, res) {
-  // Endpoint health check
   if (req.method !== "POST") {
     return res.status(200).send("Bot aktif");
   }
@@ -79,15 +78,12 @@ export default async function handler(req, res) {
   }
 
   try {
-    // ===== PASTIKAN BODY TERBACA =====
     let update = req.body;
     if (typeof update === "string") {
       update = JSON.parse(update);
     }
 
-    if (!update) {
-      return res.status(200).end();
-    }
+    if (!update) return res.status(200).end();
 
     /* ================= CALLBACK ================= */
     if (update.callback_query) {
@@ -96,6 +92,11 @@ export default async function handler(req, res) {
       const userId = cb.from.id;
       const data = cb.data;
 
+      // WAJIB: jawab callback agar tidak 400
+      await axios.post(`${TELEGRAM_API}/answerCallbackQuery`, {
+        callback_query_id: cb.id
+      });
+
       if (data === "GAME_ML" || data === "GAME_FF") {
         const game = data === "GAME_ML" ? "ML" : "FF";
         const reply = startOrder(userId, game);
@@ -103,7 +104,9 @@ export default async function handler(req, res) {
         return res.status(200).end();
       }
 
-      const cbResult = handleCallback(userId, data);
+      // FIX UTAMA: pakai await
+      const cbResult = await handleCallback(userId, data);
+
       if (cbResult) {
         if (cbResult.confirm) {
           const o = cbResult.order;
@@ -144,7 +147,7 @@ User ID: ${userId}`;
 Scan QRIS di atas untuk bayar
 
 📸 Setelah bayar, *kirim FOTO bukti transfer di chat ini*`,
-            
+            parse_mode: "Markdown"
           });
         } else {
           await sendMessage(chatId, cbResult.text, cbResult.options);
@@ -153,6 +156,7 @@ Scan QRIS di atas untuk bayar
         return res.status(200).end();
       }
 
+      /* ================= ADMIN BUTTON ================= */
       if (data.startsWith("ADMIN_")) {
         if (String(userId) !== ADMIN_ID) {
           await sendMessage(chatId, "❌ Akses admin ditolak");
@@ -243,7 +247,7 @@ Scan QRIS di atas untuk bayar
 💰 Harga: *${formatRupiah(session.product.price)}*
 
 👤 User ID: ${userId}`,
-        
+        parse_mode: "Markdown",
         reply_markup: {
           inline_keyboard: [
             [
@@ -276,7 +280,7 @@ async function sendMessage(chatId, text, options = {}) {
   await axios.post(`${TELEGRAM_API}/sendMessage`, {
     chat_id: chatId,
     text,
-    
+    parse_mode: "Markdown",
     ...options
   });
 }
