@@ -74,6 +74,7 @@ export default async function handler(req, res) {
           const o = cbResult.order;
           setWaitingPayment(userId);
 
+          // KIRIM KE USER
           await sendMessage(
             chatId,
 `✅ *Order dikonfirmasi*
@@ -84,6 +85,18 @@ export default async function handler(req, res) {
 💰 Harga: *${formatRupiah(o.product.price)}*
 
 ${PAYMENT_TEXT}`
+          );
+
+          // KIRIM NOTIF KE TELEGRAM ADMIN (ORDER MASUK)
+          await sendMessage(
+            ADMIN_ID,
+`🛒 *ORDER MASUK*
+
+🎮 Game: ${o.game}
+🆔 ID: ${o.gameId} (${o.server})
+💎 Produk: ${o.product.name}
+💰 Harga: *${formatRupiah(o.product.price)}*
+👤 User ID: ${userId}`
           );
 
           // QRIS
@@ -198,7 +211,6 @@ Scan QRIS di atas untuk bayar
 
 👤 User ID: ${userId}`,
         parse_mode: "Markdown",
-        know_reply_markup: true,
         reply_markup: {
           inline_keyboard: [
             [
