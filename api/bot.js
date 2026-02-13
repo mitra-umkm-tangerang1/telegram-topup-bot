@@ -1,5 +1,9 @@
 import axios from "axios";
 import fetch from "node-fetch";
+import FormData from "form-data";
+
+import { orderDigiflazz, checkStatusDigiflazz } from "../lib/digiflazz.js";
+import { generateInvoicePDF } from "../lib/invoice.js";
 
 import {
   startOrder,
@@ -15,6 +19,9 @@ const TOKEN = process.env.BOT_TOKEN;
 const TELEGRAM_API = `https://api.telegram.org/bot${TOKEN}`;
 const ADMIN_ID = String(process.env.ADMIN_ID || "");
 const FONNTE_TOKEN = process.env.FONNTE_TOKEN || "";
+
+// 🔥 GANTI DENGAN DOMAIN VERCEL KAMU
+const QRIS_URL = "https://telegram-topup-bot-cwgs.vercel.app/qris.jpg";
 
 // ================= FORMAT RUPIAH =================
 const formatRupiah = (number) =>
@@ -44,45 +51,13 @@ async function sendWA(text) {
   }
 }
 
-// ================= PAYMENT INFO =================
-const PAYMENT_TEXT = `
-💳 *Informasi Pembayaran*
-
-🏦 *BCA*
-0750184219
-A/N: *ROHMAN BRAMANTO*
-
-📱 *DANA*
-085694766782
-A/N: *ROHMAN BRAMANTO*
-
-📌 *Catatan penting:*
-• Transfer sesuai nominal
-• Wajib kirim *FOTO bukti transfer*
-• Screenshot / foto jelas
-`;
-
-const QRIS_IMAGE_URL =
-  "https://telegram-topup-bot-cwgs.vercel.app/qris.jpg";
-
-// =================================================
-
 export default async function handler(req, res) {
-  if (req.method !== "POST") {
-    return res.status(200).send("Bot aktif");
-  }
-
-  if (!TOKEN) {
-    console.error("BOT_TOKEN belum di set");
-    return res.status(200).end();
-  }
+  if (req.method !== "POST") return res.status(200).send("Bot aktif");
+  if (!TOKEN) return res.status(200).end();
 
   try {
     let update = req.body;
-    if (typeof update === "string") {
-      update = JSON.parse(update);
-    }
-
+    if (typeof update === "string") update = JSON.parse(update);
     if (!update) return res.status(200).end();
 
     /* ================= CALLBACK ================= */
@@ -92,19 +67,10 @@ export default async function handler(req, res) {
       const userId = cb.from.id;
       const data = cb.data;
 
-      // WAJIB: jawab callback agar tidak 400
       await axios.post(`${TELEGRAM_API}/answerCallbackQuery`, {
         callback_query_id: cb.id
       });
 
-      if (data === "GAME_ML" || data === "GAME_FF") {
-        const game = data === "GAME_ML" ? "ML" : "FF";
-        const reply = startOrder(userId, game);
-        await sendMessage(chatId, reply.text);
-        return res.status(200).end();
-      }
-
-      // FIX UTAMA: pakai await
       const cbResult = await handleCallback(userId, data);
 
       if (cbResult) {
@@ -112,51 +78,42 @@ export default async function handler(req, res) {
           const o = cbResult.order;
           setWaitingPayment(userId);
 
+          // ✅ Pesan konfirmasi
           await sendMessage(
             chatId,
 `✅ *Order dikonfirmasi*
 
-🎮 Game: ${o.game}
-🆔 ID: ${o.gameId} (${o.server})
-💎 Produk: ${o.product.name}
-💰 Harga: *${formatRupiah(o.product.price)}*
+📦 Produk: ${o.product.product_name}
+💰 Harga: *${formatRupiah(o.product.sell_price)}*
 
-${PAYMENT_TEXT}`
+💳 Silakan bayar via QRIS di bawah ini.
+Setelah bayar kirim *FOTO bukti transfer*.`
           );
 
-          const adminText =
-`🛒 ORDER MASUK
-
-Game: ${o.game}
-ID: ${o.gameId} (${o.server})
-Produk: ${o.product.name}
-Harga: ${formatRupiah(o.product.price)}
-User ID: ${userId}`;
-
-          if (ADMIN_ID) {
-            await sendMessage(ADMIN_ID, adminText);
-          }
-
-          await sendWA(adminText);
-
+          // ✅ Kirim QRIS otomatis
           await axios.post(`${TELEGRAM_API}/sendPhoto`, {
             chat_id: chatId,
-            photo: QRIS_IMAGE_URL,
-            caption:
-`📷 *QRIS Pembayaran*
-Scan QRIS di atas untuk bayar
-
-📸 Setelah bayar, *kirim FOTO bukti transfer di chat ini*`,
+            photo: QRIS_URL,
+            caption: `📷 *QRIS Pembayaran*\n\nNominal: ${formatRupiah(
+              o.product.sell_price
+            )}\n\nScan & bayar sesuai nominal.`,
             parse_mode: "Markdown"
           });
-        } else {
-          await sendMessage(chatId, cbResult.text, cbResult.options);
+
+          await sendWA(`ORDER MASUK
+
+Produk: ${o.product.product_name}
+Harga: ${formatRupiah(o.product.sell_price)}
+User ID: ${userId}`);
+
+          return res.status(200).end();
         }
 
+        await sendMessage(chatId, cbResult.text, cbResult.options);
         return res.status(200).end();
       }
 
-      /* ================= ADMIN BUTTON ================= */
+      /* ================= ADMIN ================= */
       if (data.startsWith("ADMIN_")) {
         if (String(userId) !== ADMIN_ID) {
           await sendMessage(chatId, "❌ Akses admin ditolak");
@@ -168,30 +125,80 @@ Scan QRIS di atas untuk bayar
         if (!order) return res.status(200).end();
 
         if (action === "APPROVE") {
-          setStatus(targetUserId, "APPROVED");
+          setStatus(targetUserId, "PROCESSING");
+
           await sendMessage(
             targetUserId,
-            "✅ *Pembayaran diterima*\n⏳ Order sedang diproses"
+            "⏳ Pembayaran diterima\nMemproses ke server..."
           );
-          await sendMessage(chatId, "✔️ Order di-approve");
+
+          const refId = "INV" + Date.now();
+
+          const trx = await orderDigiflazz(
+            refId,
+            order.product.buyer_sku_code,
+            order.customerNo
+          );
+
+          if (!trx?.data) {
+            await sendMessage(targetUserId, "❌ Gagal kirim ke server");
+            return res.status(200).end();
+          }
+
+          let finalStatus = trx.data.status;
+          let sn = trx.data.sn || "";
+
+          for (let i = 0; i < 6; i++) {
+            if (finalStatus === "Sukses") break;
+            await new Promise(r => setTimeout(r, 5000));
+            const check = await checkStatusDigiflazz(refId);
+            finalStatus = check?.data?.status;
+            sn = check?.data?.sn || "";
+          }
+
+          if (finalStatus === "Sukses") {
+            const pdfBuffer = await generateInvoicePDF({
+              invoice: refId,
+              product: order.product.product_name,
+              price: formatRupiah(order.product.sell_price),
+              target: order.customerNo,
+              sn
+            });
+
+            const form = new FormData();
+            form.append("chat_id", targetUserId);
+            form.append("document", pdfBuffer, {
+              filename: "invoice.pdf",
+              contentType: "application/pdf"
+            });
+            form.append(
+              "caption",
+              `✅ *TRANSAKSI BERHASIL*\n\nInvoice: ${refId}\n\nSN:\n\`${sn}\``
+            );
+            form.append("parse_mode", "Markdown");
+
+            await axios.post(`${TELEGRAM_API}/sendDocument`, form, {
+              headers: form.getHeaders()
+            });
+
+            await sendMessage(chatId, "✅ Transaksi sukses");
+            clearSession(targetUserId);
+          } else {
+            await sendMessage(
+              targetUserId,
+              `❌ Transaksi gagal\nStatus: ${finalStatus}`
+            );
+            await sendMessage(chatId, "❌ Transaksi gagal");
+          }
         }
 
         if (action === "REJECT") {
           clearSession(targetUserId);
           await sendMessage(
             targetUserId,
-            "❌ *Pembayaran ditolak*\nSilakan order ulang dengan /start"
+            "❌ Pembayaran ditolak\nSilakan order ulang."
           );
           await sendMessage(chatId, "❌ Order ditolak");
-        }
-
-        if (action === "DONE") {
-          clearSession(targetUserId);
-          await sendMessage(
-            targetUserId,
-            "🎉 *Order selesai*\nDiamond sudah masuk 🙏"
-          );
-          await sendMessage(chatId, "🎮 Order ditandai SELESAI");
         }
 
         return res.status(200).end();
@@ -209,29 +216,14 @@ Scan QRIS di atas untuk bayar
     const text = message.text || "";
 
     if (text === "/start") {
-      await sendMessage(
-        chatId,
-`👋 *Selamat datang di Bot Top Up Game*
-
-🎮 Pilih game:`,
-        {
-          reply_markup: {
-            inline_keyboard: [
-              [{ text: "🎯 Mobile Legends", callback_data: "GAME_ML" }],
-              [{ text: "🔥 Free Fire", callback_data: "GAME_FF" }]
-            ]
-          }
-        }
-      );
+      const start = await startOrder(userId);
+      await sendMessage(chatId, start.text, start.options);
       return res.status(200).end();
     }
 
     if (message.photo) {
       const session = getSession(userId);
-      if (!session || session.step !== "WAIT_PAYMENT") {
-        await sendMessage(chatId, "❌ Tidak ada order aktif\nKetik /start");
-        return res.status(200).end();
-      }
+      if (!session) return res.status(200).end();
 
       const fileId = message.photo.at(-1).file_id;
 
@@ -239,32 +231,24 @@ Scan QRIS di atas untuk bayar
         chat_id: ADMIN_ID,
         photo: fileId,
         caption:
-`🧾 *BUKTI TRANSFER*
+`🧾 Bukti transfer
 
-🎮 Game: ${session.game}
-🆔 ID: ${session.gameId} (${session.server})
-💎 Produk: ${session.product.name}
-💰 Harga: *${formatRupiah(session.product.price)}*
-
-👤 User ID: ${userId}`,
-        parse_mode: "Markdown",
+Produk: ${session.product.product_name}
+User ID: ${userId}`,
         reply_markup: {
           inline_keyboard: [
             [
               { text: "✅ Approve", callback_data: `ADMIN_APPROVE_${userId}` },
               { text: "❌ Tolak", callback_data: `ADMIN_REJECT_${userId}` }
-            ],
-            [{ text: "🎮 Selesai", callback_data: `ADMIN_DONE_${userId}` }]
+            ]
           ]
         }
       });
 
-      session.step = "WAIT_ADMIN";
-      await sendMessage(chatId, "⏳ Bukti diterima\nMenunggu konfirmasi admin 🙏");
-      return res.status(200).end();
+      await sendMessage(chatId, "⏳ Menunggu konfirmasi admin");
     }
 
-    const textResult = handleText(userId, text);
+    const textResult = await handleText(userId, text);
     if (textResult) {
       await sendMessage(chatId, textResult.text, textResult.options);
     }
