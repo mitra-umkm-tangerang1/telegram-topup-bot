@@ -11,9 +11,9 @@ import {
   handleCallback,
   getSession,
   clearSession,
-  setStatus,
-  setWaitingPayment
+  setStatus
 } from "../lib/order.js";
+
 
 const TOKEN = process.env.BOT_TOKEN;
 const TELEGRAM_API = `https://api.telegram.org/bot${TOKEN}`;
@@ -79,7 +79,6 @@ export default async function handler(req, res) {
       if (cbResult) {
         if (cbResult.confirm) {
           const o = cbResult.order;
-          setWaitingPayment(userId);
 
           await sendMessage(
             chatId,
