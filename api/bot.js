@@ -2,7 +2,7 @@ import axios from "axios";
 import fetch from "node-fetch";
 import FormData from "form-data";
 
-import { orderDigiflazz, checkStatusDigiflazz } from "../lib/digiflazz.js";
+import { orderDigiflazz, checkStatus } from "../lib/digiflazz.js";
 import { generateInvoicePDF } from "../lib/invoice.js";
 
 import {
@@ -20,10 +20,8 @@ const TELEGRAM_API = `https://api.telegram.org/bot${TOKEN}`;
 const ADMIN_ID = String(process.env.ADMIN_ID || "");
 const FONNTE_TOKEN = process.env.FONNTE_TOKEN || "";
 
-// 🔥 GANTI DENGAN DOMAIN VERCEL KAMU
 const QRIS_URL = "https://telegram-topup-bot-cwgs.vercel.app/qris.jpg";
 
-// ================= FORMAT RUPIAH =================
 const formatRupiah = (number) =>
   new Intl.NumberFormat("id-ID", {
     style: "currency",
@@ -31,7 +29,6 @@ const formatRupiah = (number) =>
     minimumFractionDigits: 0
   }).format(number);
 
-// ================= KIRIM WHATSAPP =================
 async function sendWA(text) {
   if (!FONNTE_TOKEN) return;
   try {
@@ -52,8 +49,14 @@ async function sendWA(text) {
 }
 
 export default async function handler(req, res) {
-  if (req.method !== "POST") return res.status(200).send("Bot aktif");
-  if (!TOKEN) return res.status(200).end();
+  if (req.method !== "POST") {
+    return res.status(200).send("Bot aktif");
+  }
+
+  if (!TOKEN) {
+    console.error("BOT_TOKEN belum diset");
+    return res.status(200).end();
+  }
 
   try {
     let update = req.body;
@@ -78,7 +81,6 @@ export default async function handler(req, res) {
           const o = cbResult.order;
           setWaitingPayment(userId);
 
-          // ✅ Pesan konfirmasi
           await sendMessage(
             chatId,
 `✅ *Order dikonfirmasi*
@@ -90,13 +92,14 @@ export default async function handler(req, res) {
 Setelah bayar kirim *FOTO bukti transfer*.`
           );
 
-          // ✅ Kirim QRIS otomatis
           await axios.post(`${TELEGRAM_API}/sendPhoto`, {
             chat_id: chatId,
             photo: QRIS_URL,
-            caption: `📷 *QRIS Pembayaran*\n\nNominal: ${formatRupiah(
-              o.product.sell_price
-            )}\n\nScan & bayar sesuai nominal.`,
+            caption: `📷 *QRIS Pembayaran*
+
+Nominal: ${formatRupiah(o.product.sell_price)}
+
+Scan & bayar sesuai nominal.`,
             parse_mode: "Markdown"
           });
 
@@ -151,7 +154,7 @@ User ID: ${userId}`);
           for (let i = 0; i < 6; i++) {
             if (finalStatus === "Sukses") break;
             await new Promise(r => setTimeout(r, 5000));
-            const check = await checkStatusDigiflazz(refId);
+            const check = await checkStatus(refId);
             finalStatus = check?.data?.status;
             sn = check?.data?.sn || "";
           }
@@ -173,7 +176,12 @@ User ID: ${userId}`);
             });
             form.append(
               "caption",
-              `✅ *TRANSAKSI BERHASIL*\n\nInvoice: ${refId}\n\nSN:\n\`${sn}\``
+              `✅ *TRANSAKSI BERHASIL*
+
+Invoice: ${refId}
+
+SN:
+\`${sn}\``
             );
             form.append("parse_mode", "Markdown");
 
@@ -255,7 +263,7 @@ User ID: ${userId}`,
 
     return res.status(200).end();
   } catch (err) {
-    console.error("BOT ERROR:", err?.message);
+    console.error("BOT ERROR:", err);
     return res.status(200).end();
   }
 }
